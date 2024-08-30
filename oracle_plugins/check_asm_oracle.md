@@ -1,119 +1,63 @@
-# Hướng dẫn sử dụng check_asm_oracle.pl
+# Script check_asm.pl
 
-## Giới thiệu
+Script check_asm.pl là một plugin Nagios được viết bằng Perl để giám sát Oracle ASM (Automatic Storage Management). Script này thực hiện các check trạng thái, sức khỏe của ASM instance và các disk group.
 
-`check_asm` là một plugin Nagios được thiết kế để kiểm tra trạng thái của Oracle Automatic Storage Management (ASM). Script này có thể kiểm tra nhiều khía cạnh của ASM, bao gồm trạng thái disk group, không gian sử dụng, trạng thái đĩa và lỗi trong alert log.
+## Các thành phần chính
 
-## Yêu cầu hệ thống
+1. Khai báo sử dụng các module Perl cần thiết như DBI, Getopt::Long, Parallel::ForkManager, Cache::FileCache, Log::Log4perl.
 
-- Perl 5.10 hoặc cao hơn
-- Các module Perl sau:
-  - DBI
-  - DBD::Oracle
-  - Cache::FileCache
-  - Log::Log4perl
-  - Getopt::Long
-  - Time::HiRes
+2. Định nghĩa các hằng số:
+   - DEFAULT_WARN_PERC: Ngưỡng cảnh báo mặc định (85%)
+   - DEFAULT_CRIT_PERC: Ngưỡng critical mặc định (95%) 
+   - CACHE_EXPIRY: Thời gian cache hết hạn (300s)
+   - MAX_PARALLEL_PROCESSES: Số process song song tối đa (5)
+   - Các câu lệnh SQL để check trạng thái ASM
 
-## Cài đặt
+3. Xử lý tham số dòng lệnh với Getopt::Long để lấy các tham số:
+   - asm_home: đường dẫn ORACLE_HOME của ASM 
+   - action: hành động check (status, dgstate, usedspace, diskstatus, alertlogerror)
+   - threshold: ngưỡng cảnh báo cho từng diskgroup (chỉ áp dụng cho action usedspace)
 
-1. Sao chép script `check_asm` vào thư mục plugins của Nagios (thường là `/usr/lib64/nagios/plugins/`).
-2. Cấp quyền thực thi cho script:
-   ```
-   chmod +x /usr/lib64/nagios/plugins/check_asm_oracle.pl
-   ```
-3. Cài đặt các module Perl cần thiết. Bạn có thể sử dụng CPAN:
-   ```
-   cpan DBI DBD::Oracle Cache::FileCache Log::Log4perl
-   ```
+4. Kiểm tra xem ASM instance đang chạy hay không, lấy SID và thiết lập các biến môi trường.
 
-## Cấu hình
+5. Kết nối đến ASM instance bằng DBI.
 
-### Cấu hình sudo
+6. Dựa vào tham số action, gọi tới hàm thực hiện check tương ứng:
+   - status: check trạng thái ASM instance 
+   - dgstate: check trạng thái các disk group
+   - usedspace: check dung lượng sử dụng của disk group
+   - diskstatus: check trạng thái của các disk trong ASM
+   - alertlogerror: check lỗi trong ASM alert log
 
-1. Chỉnh sửa file `/etc/sudoers` để cho phép người dùng Nagios chạy script với quyền của người dùng Oracle:
-   ```
-   Defaults:nagios !requiretty
-   nagios ALL=(oracle) NOPASSWD: /usr/lib64/nagios/plugins/check_asm
-   ```
+7. Các hàm check sẽ trả về exit code tương ứng với trạng thái và thông điệp, ví dụ:
+   - OK (exit code 0)
+   - WARNING (exit code 1)
+   - CRITICAL (exit code 2)
+   - UNKNOWN (exit code 3)
 
-### Cấu hình Nagios
+8. Kết quả check được cache lại trong 1 khoảng thời gian quy định bởi CACHE_EXPIRY.
 
-Thêm các command sau vào file cấu hình Nagios (thường là `commands.cfg`):
+9. Có validate các tham số đầu vào và hiển thị cách sử dụng nếu tham số không hợp lệ.
 
-```
-define command {
-    command_name check_asm_diskstatus
-    command_line sudo -u oracle /usr/lib64/nagios/plugins/check_asm --asm_home=$ARG1$ --action=diskstatus
-}
-
-define command {
-    command_name check_asm_dgstate
-    command_line sudo -u oracle /usr/lib64/nagios/plugins/check_asm --asm_home=$ARG1$ --action=dgstate
-}
-
-define command {
-    command_name check_asm_alertlogerror
-    command_line sudo -u oracle /usr/lib64/nagios/plugins/check_asm --asm_home=$ARG1$ --action=alertlogerror
-}
-
-define command {
-    command_name check_asm_usedspace
-    command_line sudo -u oracle /usr/lib64/nagios/plugins/check_asm --asm_home=$ARG1$ --action=usedspace --threshold $ARG2$
-}
-```
-
-## Sử dụng
-
-Cú pháp cơ bản:
+## Cách sử dụng
 
 ```
-check_asm --asm_home <ORACLE_HOME for ASM> --action <ACTION> [--threshold <GROUP_DISK=WarnPerc:CritPerc>]
+$0 --help --asm_home <ORACLE_HOME for ASM> --action <ACTION> --threshold <GROUP_DISK=integer> [[--threshold <GROUP_DISK=integer>] ...]
+
+Examples:
+    $0 --asm_home /u01/app/oracle/product/11.2.0/asm --action usedspace --threshold DATA=80:90  
+    $0 --asm_home /u01/app/oracle/product/11.2.0/asm --action status
+
+Options:
+    --help:         prints this info
+    --asm_home:     ORACLE_HOME for asm instance   
+    --action:       status|dgstate|diskstatus|usedspace|alertlogerror
+    --threshold:    GROUP_DISK_NAME=WarnPerc:CritPerc - percentage threshold for used space (range [0..100]) - use for <usedspace> action
 ```
 
-### Các tham số
+## Yêu cầu
 
-- `--asm_home`: Đường dẫn đến ORACLE_HOME cho instance ASM
-- `--action`: Hành động kiểm tra (status|dgstate|diskstatus|usedspace|alertlogerror)
-- `--threshold`: Ngưỡng cảnh báo và nguy hiểm cho không gian sử dụng (chỉ dùng với action usedspace)
-
-### Các hành động
-
-1. `status`: Kiểm tra xem instance ASM có đang chạy không
-2. `dgstate`: Kiểm tra trạng thái của các disk group
-3. `diskstatus`: Kiểm tra trạng thái của các đĩa trong ASM
-4. `usedspace`: Kiểm tra không gian sử dụng của các disk group
-5. `alertlogerror`: Kiểm tra các lỗi ORA- trong alert log của ASM
-
-### Ví dụ
-
-1. Kiểm tra trạng thái disk:
-   ```
-   ./check_asm --asm_home=/oracle/gridhome --action=diskstatus
-   ```
-
-2. Kiểm tra trạng thái disk group:
-   ```
-   ./check_asm --asm_home=/oracle/gridhome --action=dgstate
-   ```
-
-3. Kiểm tra không gian sử dụng với ngưỡng tùy chỉnh:
-   ```
-   ./check_asm --asm_home=/oracle/gridhome --action=usedspace --threshold DATA=95:98
-   ```
-
-## Xử lý lỗi
-
-Nếu script gặp lỗi, nó sẽ trả về một mã trạng thái và thông báo lỗi phù hợp với chuẩn Nagios. Các log chi tiết được ghi vào file log của Log::Log4perl (mặc định là STDERR).
-
-## Caching
-
-Script sử dụng caching để cải thiện hiệu suất. Kết quả của các kiểm tra được cache trong 5 phút (có thể điều chỉnh bằng cách thay đổi giá trị `CACHE_EXPIRY`).
-
-## Bảo mật
-
-Script này cần quyền truy cập vào instance ASM. Đảm bảo rằng chỉ những người dùng được ủy quyền mới có thể chạy script này.
-
-## Hỗ trợ
-
-Nếu bạn gặp bất kỳ vấn đề nào khi sử dụng script này, vui lòng liên hệ với team hỗ trợ hoặc tạo một issue trên repository của project.
+- Perl 5.8.3 hoặc cao hơn
+- Các module Perl: DBI, DBD::Oracle, Getopt::Long, Parallel::ForkManager, Cache::FileCache, Time::HiRes, Log::Log4perl
+- Truy cập vào ASM instance với quyền đọc dba_* views
+- Plugin được đặt đúng vị trí trong thư mục libexec của Nagios và có quyền thực thi
